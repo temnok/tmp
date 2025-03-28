@@ -1,0 +1,296 @@
+<html>
+<head>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        html, body {
+            overflow: hidden;
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        *, *:before, *:after { box-sizing: inherit; }
+
+        svg {
+            height: 100%;
+            width: 100%;
+            /*border: 5px solid black;*/
+            cursor: default;
+            user-select: none;
+        }
+    </style>
+
+    <script>
+        (() => {
+            class Tree {
+                static createFull(h) {
+                    const createNode = (a, b) => {
+                        if (a < b) {
+                            const m = Math.floor((a + b) / 2)
+                            return {value: m, kids: [createNode(a, m), createNode(m + 1, b)]}
+                        }
+                    }
+                    const t = new Tree()
+                    t.size = (1 << h) - 1
+                    t.root = createNode(0, t.size)
+                    return t
+                }
+
+                height() {
+                    const rec = (n) => n? 1 + Math.max(rec(n.kids[0]), rec(n.kids[1])) : 0
+                    return rec(this.root)
+                }
+
+                rotate(v) {
+                    const [n, p, g] = this._findNode(v)
+                    if (n && p) {
+                        const dir = p.kids[0] == n? 1 : 0
+                        p.kids[1 - dir] = n.kids[dir]
+                        n.kids[dir] = p
+                        if (g) {
+                            g.kids[g.kids[0] == p? 0 : 1] = n
+                        } else {
+                            this.root = n
+                        }
+                        return true
+                    }
+                    return false
+                }
+
+                _findNode(v) {
+                    for (let n = this.root, p, g; n; g = p, p = n, n = n.kids[v < n.value? 0 : 1]) {
+                        if (v == n.value) {
+                            return [n, p, g]
+                        }
+                    }
+                    return []
+                }
+            }
+
+            let tree, model, canvas, cellSize
+
+            window.addEventListener("load", () => {
+                tree = Tree.createFull(4)
+                model = createInitialModel()
+                canvas = document.getElementById("canvas")
+
+                createViewFromModel()
+                onResize()
+
+                canvas.addEventListener("click", onClick)
+                window.addEventListener("resize", onResize)
+
+                setTimeout(() => {
+                    animateModel(createModelFromTree(), 2.5)
+                }, 500)
+            })
+
+            function onResize() {
+                cellSize = Math.min(canvas.clientWidth, canvas.clientHeight) / 16
+                updateViewFromModel()
+            }
+
+            function onClick(event) {
+                const mouse = gridCoordsFromEvent(event)
+                const i = nodeIndexByXY(Math.round(mouse.x), Math.round(mouse.y))
+                if (i >= 0) {
+                    const node = model.nodes[i]
+                    if (tree.rotate(node.label)) {
+                        const m = createModelFromTree()
+                        animateModel(m, 0.25)
+                    }
+                }
+            }
+
+            function createInitialModel() {
+                const model = {nodes: []}, x0 = -Math.floor(tree.size / 2)
+                for (let i = 0; i < tree.size; i++) {
+                    model.nodes[i] = {label: i, x: x0 + i, y: -4}
+                }
+                return model
+            }
+
+            function createModelFromTree() {
+                const model = {nodes: []}, x0 = -Math.floor(tree.size / 2), y0 = Math.floor(tree.height() / 2)
+                const rec = (n, y) => {
+                    const node = {label: n.value, x: x0 + n.value, y: y, arrows: []}
+                    for (let i = 0; i < 2; i++) {
+                        if (n.kids[i]) {
+                            node.arrows[i] = {x: x0 + n.kids[i].value, y: y - 1}
+                            rec(n.kids[i], y - 1)
+                        }
+                    }
+                    model.nodes[n.value] = node
+                }
+                rec(tree.root, y0)
+                return model
+            }
+
+            function nodeIndexByXY(x, y) {
+                for (let i = 0; i < model.nodes.length; i++) {
+                    const v = model.nodes[i]
+                    if (v.x == x && v.y == y) {
+                        return i
+                    }
+                }
+                return -1
+            }
+
+            function animateModel(targetModel, seconds) {
+                const startModel = deepCopy(model), start = Date.now()
+                const callback = () => {
+                    const p = Math.min((Date.now() - start) / (seconds * 1000), 1)
+                    applyModelP(startModel, targetModel, p)
+                    updateViewFromModel()
+                    if (p < 1) {
+                        setTimeout(callback, 1000 / 60)
+                    }
+                }
+                callback()
+            }
+
+            function applyModelP(model0, model1, p) {
+                for (let i = 0; i < model.nodes.length; i++) {
+                    const v = model.nodes[i], v0 = model0.nodes[i], v1 = model1.nodes[i]
+                    applyNodeP(v, v0, v1, p)
+                }
+            }
+
+            function applyNodeP(v, v0, v1, p) {
+                if (v0 && v1) {
+                    v.x = applyP(v0.x, v1.x, p)
+                    v.y = applyP(v0.y, v1.y, p)
+                    v.arrows = v.arrows || []
+                    for (let i = 0; i < 2; i++) {
+                        const a0 = (v0.arrows || [])[i] || {x: v0.x, y: v0.y}
+                        const a1 = (v1.arrows || [])[i] || {x: v1.x, y: v1.y}
+                        v.arrows[i] = {x: applyP(a0.x, a1.x, p), y: applyP(a0.y, a1.y, p)}
+                    }
+                }
+            }
+
+            function applyP(v0, v1, p) {
+                return v0 * (1 - p) + v1 * p
+            }
+
+            function createViewFromModel() {
+                for (let i = 0; i < model.nodes.length; i++) {
+                    createNodeView("node-" + i)
+                }
+            }
+
+            function createNodeView(id) {
+                const svgNS = "http://www.w3.org/2000/svg"
+                const circle = document.createElementNS(svgNS, "circle")
+                circle.setAttribute("id", id + "-circle")
+                circle.setAttribute("fill", "white")
+                circle.setAttribute("stroke", "black")
+                canvas.appendChild(circle)
+                const text = document.createElementNS(svgNS, "text")
+                text.setAttribute("id", id + "-text")
+                text.setAttribute("alignment-baseline", "middle")
+                text.setAttribute("text-anchor", "middle")
+                canvas.appendChild(text)
+                for (let i = 0; i < 2; i++) {
+                    const arrow = document.createElementNS(svgNS, "line")
+                    arrow.setAttribute("id", id + "-arrow-" + i)
+                    arrow.setAttribute("stroke", "black")
+                    arrow.setAttribute("marker-end", "url(#arrowhead)")
+                    arrow.setAttribute("visibility", "hidden")
+                    canvas.appendChild(arrow)
+                }
+            }
+
+            function updateViewFromModel() {
+                for (let i = 0; i < model.nodes.length; i++) {
+                    updateNodeView("node-" + i, model.nodes[i])
+                }
+            }
+
+            function updateNodeView(id, v) {
+                const circle = document.getElementById(id + "-circle")
+                const text = document.getElementById(id + "-text")
+                if (v) {
+                    circle.setAttribute("cx", canvasX(v.x))
+                    circle.setAttribute("cy", canvasY(v.y))
+                    circle.setAttribute("r", cellSize * 0.5)
+                    circle.setAttribute("stroke-width", cellSize * 0.1)
+
+                    circle.removeAttribute("visibility")
+                    text.setAttribute("x", canvasX(v.x))
+                    text.setAttribute("y", canvasY(v.y - 0.02))
+                    text.setAttribute("style", "font: bold " + (cellSize * 0.6) + "px sans-serif")
+                    text.removeAttribute("visibility")
+                    text.textContent = v.label
+                    for (let i = 0; i < 2; i++) {
+                        let a = (v.arrows || [])[i] || {x: v.x, y: v.y}, arrow = document.getElementById(id + "-arrow-" + i)
+                        a = shrinkArrowCoords({x1: canvasX(v.x), y1: canvasY(v.y), x2: canvasX(a.x), y2: canvasY(a.y)})
+                        if (a) {
+                            arrow.setAttribute("x1", a.x1)
+                            arrow.setAttribute("y1", a.y1)
+                            arrow.setAttribute("x2", a.x2)
+                            arrow.setAttribute("y2", a.y2)
+                            arrow.setAttribute("stroke-width", cellSize * 0.075)
+                            arrow.removeAttribute("visibility")
+                        } else {
+                            arrow.setAttribute("visibility", "hidden")
+                        }
+                    }
+                } else {
+                    circle.setAttribute("visibility", "hidden")
+                    text.setAttribute("visibility", "hidden")
+                }
+            }
+
+            function shrinkArrowCoords(a) {
+                const dx = a.x2 - a.x1, dy = a.y2 - a.y1, len = Math.sqrt(dx*dx + dy*dy), r = cellSize * 0.5
+                if (len - r * 2 <= cellSize * 0.25) {
+                    return null
+                }
+                const rx = r * dx / len, ry = r * dy / len
+                return {x1: a.x1 + rx, y1: a.y1 + ry, x2: a.x2 - rx*1.25, y2: a.y2 - ry*1.25}
+            }
+
+            function canvasX(gridX) {
+                return canvas.clientWidth / 2 + gridX * cellSize
+            }
+
+            function canvasY(gridY) {
+                return canvas.clientHeight / 2 - gridY * cellSize
+            }
+
+            function gridX(canvasX) {
+                return (canvasX - canvas.clientWidth / 2) / cellSize
+            }
+
+            function gridY(canvasY) {
+                return (canvas.clientHeight / 2 - canvasY) / cellSize
+            }
+
+            function gridCoordsFromEvent(event) {
+                const r = canvas.getBoundingClientRect(), x = event.clientX, y = event.clientY
+                return { x: gridX(x - r.left), y: gridY(y - r.top) }
+            }
+
+            function deepCopy(obj) {
+                return JSON.parse(JSON.stringify(obj))
+            }
+        })()
+    </script>
+
+</head>
+<body>
+
+<svg id="canvas">
+    <defs>
+        <marker id="arrowhead" refX="1.5" refY="1.5" markerWidth="10" markerHeight="10" orient="auto">
+            <path d="M 0 0 L 3 1.5 L 0 3 z"/>
+        </marker>
+    </defs>
+    <text x="20" y="20" style="font: italic 10px sans-serif">Objective: click on child nodes to perform rotations.</text>
+</svg>
+
+</body>
+</html>
